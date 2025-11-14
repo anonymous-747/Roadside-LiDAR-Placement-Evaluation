@@ -1,86 +1,98 @@
-# LiDAR Point Cloud Analysis for Vehicle Detection Performance Estimation
-This project is a collection of Python scripts designed to analyze LiDAR point clouds and estimate the performance of 3D object detectors (like Average Precision, AP) without requiring ground truth labels from the detector itself. It introduces metrics like Estimated AP (E-AP) and Expected Ground Vehicle Score (EGVS) to evaluate detection quality based on the physical properties of the point cloud and expected vehicle locations.
+# Evaluating Roadside LiDAR Placement with a Probability-based Surrogate Metric
 
-The primary use case is for LiDAR placement optimization, allowing users to assess the quality of sensor data from a specific viewpoint before training and deploying a full detection model.
+This repository provides the official Python implementation for the paper: **"Evaluating Roadside LiDAR Placement with a Probability-based Surrogate Metric"**.
 
-## Core Concepts
-* Estimated Average Precision (E-AP): This is a novel metric calculated by this toolset. Instead of matching detector outputs to ground truth boxes, it analyzes the point cloud data within potential vehicle locations. It generates an "information score" (how well the points resemble a vehicle) and a "confidence score" for each potential object. These scores are then used to compute a precision-recall curve and ultimately the E-AP.
+The core of this work is **E-AP**, a novel surrogate metric that provides a direct, computationally efficient estimation of object detection Average Precision (AP) for a given roadside LiDAR configuration. This metric allows for the rapid evaluation of different sensor placements without the need to collect unique datasets or train new detection models for every potential setup.
 
-* Expected Ground Vehicle Score (EGVS): A metric that evaluates a LiDAR position's overall effectiveness. It voxelizes the space, calculates the historical probability of a vehicle appearing in each voxel, and weights this by the number of LiDAR points that fall into that voxel. A higher EGVS suggests a better sensor position for observing vehicles.
 
-* Shadow Analysis: The scripts heavily rely on projecting the "shadow" a vehicle would cast on the ground from the LiDAR's perspective. The distribution and density of points within this shadow region are key inputs for calculating the information and confidence scores.
+## How E-AP Works
 
-## File Descriptions
-Here is a breakdown of what each script does:
+The E-AP calculation pipeline, as implemented in this repository, follows the methodology described in the paper:
 
-- EGVS.py 
-    - Calculates the Expected Ground Vehicle Score (EGVS).
+1. **Vehicle Heatmap Generation (`voxelize_map.py`)**
 
-    - It creates a heatmap of vehicle probabilities from label files and then counts the number of point cloud points that fall within each voxel to generate the final score.
+   * The process begins by analyzing a `labels_directory` which contains ground-truth vehicle poses from a simulation or dataset.
 
-- calculate_estimated_AP.py
+   * It aggregates all vehicle poses (`x`, `y`, `theta`) into a 2D-plus-orientation grid, creating a vehicle distribution heatmap. This map, `V(x,y,θ)`, represents the number of times a vehicle appeared at each specific pose.
 
-    - The main script for computing the Estimated Average Precision (E-AP).
+2. **Per-Pose Scoring (BOPE) (`pointcloud_score.py`)**
 
-    - It uses a voxel map of vehicle locations and calls pointcloud_score.py to evaluate each potential vehicle.
+   * For each populated cell in the heatmap (representing a common vehicle pose), the script calculates two key values:
 
-    - It then calculates a precision-recall curve based on the returned scores to find the E-AP.
+     * **Occlusion Shadow Calculation:** It first computes the 2D ground-plane occlusion shadow that a vehicle at this pose would cast, relative to the LiDAR's position (`multiple_vehicle_display.py`).
 
-- pointcloud_score.py
+     * **Point Cloud Filtering:** It takes an "empty-scene" point cloud (a scan of the environment *without* any vehicles) and filters it, keeping only the points that fall inside the calculated shadow.
 
-    - A core utility that calculates an "information score" and a "confidence score" for a single potential vehicle.
+     * **Bayesian Estimation:** Using these "shadowed" points, it applies Bayesian inference (via `math_toolbox.py`) to estimate the probability of a successful detection. This probabilistic accuracy is the **Bayesian Occlusion-based Perception Estimation (BOPE)**, referred to in the code as `information_score`.
 
-    - It projects the vehicle's shadow and analyzes the distribution of points on the vehicle's front, side, and top surfaces to determine if the object is likely a well-observed vehicle.
+     * A `confidence_score` (based on the number of points in the shadow) is also calculated.
 
-- math_toolbox.py
+3. **Final E-AP Calculation (`calculate_estimated_AP.py`)**
 
-    - A helper script containing complex mathematical functions, primarily for numerical integration (dblquad).
+   * As described in Algorithm 1 of the paper, all scored poses are sorted in descending order by their `confidence_score`.
 
-    - These functions are accelerated with Numba (@jit) and are used by pointcloud_score.py to calculate probabilities based on point distribution models.
+   * The script iterates this sorted list, using the `information_score` (BOPE) and the vehicle count (`number`) from each pose to probabilistically build a Precision-Recall curve.
 
-- multiple_vehicle_display.py & draw_occluded_pointcloud.py
+   * The final **E-AP** score is the Area Under this P-R curve (calculated as AP@R40), which serves as the final surrogate metric for the LiDAR placement.
 
-    - Visualization scripts that use Open3D.
+## Repository Structure
 
-    - They can render a point cloud, overlay vehicle bounding boxes, and draw the calculated shadow projections on the ground. This is crucial for debugging and understanding the geometric analysis.
+* `demo_estimated_AP.py`: The main script to run a demo calculation. This is the best place to start.
 
-- car_differenet_range.py
+* `calculate_estimated_AP.py`: The main orchestrator that implements Algorithm 1, tying together the heatmap and the per-pose scores.
 
-    - An analysis script that investigates the relationship between the number of points on a vehicle and the "confidence score" calculated by pointcloud_score.py.
+* `voxelize_map.py`: Reads label files and generates the vehicle distribution heatmap.
 
-    - It processes data from various scenes (highway, crossroad, curve), performs a linear regression, and plots the results to validate the scoring metric.
+* `pointcloud_score.py`: Calculates the BOPE (`information_score`) and `confidence_score` for a single vehicle pose.
 
-- parametre_sen_test.py
+* `multiple_vehicle_display.py`: A geometry helper library for calculating 2D vehicle bounding boxes and their occlusion shadows.
 
-    - A script for conducting sensitivity analysis on the model's parameters.
+* `math_toolbox.py`: The core mathematical functions (using `scipy` and `numba`) that perform the numerical integration for the Bayesian estimation.
 
-    - It systematically varies key parameters (e.g., gamma, car_height, n_correlation) and re-calculates the E-AP to understand how each parameter affects the outcome. This is used for tuning the estimation model.
+* `demo/`: A folder containing example data.
 
-- draw_figure.py
+  * `demo/vehicle_num/`: An example `labels_directory`.
 
-    -A plotting script that uses Matplotlib to generate scatter plots.
+  * `demo/pure_points/`: An example "empty-scene" point cloud.
 
-    - It compares the E-AP and EGVS metrics calculated by these scripts against ground truth AP values from established detectors (like PointPillar and PVRCNN) to validate the accuracy of the estimation methods.
+## How to Run Demo
 
-- demo_estimated_AP.py
+### 1. Prerequisites
 
-    - A simple example script demonstrating how to use the core function calculate_estimated_AP on a sample point cloud and label directory.
+You will need the following Python libraries. You can install them via pip:
 
-## How to Run
-Dependencies: Ensure you have the required Python libraries installed:
-```bash
-conda create -n RLiDAR python=3.8
-conda activate RLiDAR
-pip install numpy open3d matplotlib scipy numba
+```
+conda create -n eval_LiDAR python=3.10
+conda activate eval_LiDAR
+pip install numpy open3d scipy numba matplotlib
 ```
 
-Demo: To run a simple demonstration of the E-AP calculation, execute the demo script. You will need a demo folder containing a vehicle_num subdirectory with label files and a pure_points subdirectory with a .pcd file.
-```python
+### 2. Extract the data
+
+```
+unzip ./demo/vehicle_num.zip
+```
+### 3. Run the Script
+
+
+```
 python demo_estimated_AP.py
 ```
 
-Visualization: To visualize the point clouds with vehicle boxes and shadows, run draw_occluded_pointcloud.py or multiple_vehicle_display.py after configuring the file paths inside the script.
+## How to Prepare Your Data
 
-```python
-python draw_occluded_pointcloud.py
+
+To evaluate your own scene, you need two things:
+
+1. **Empty-Scene Point Cloud:** A single `.pcd` file of your scene with **no vehicles** or dynamic objects. This is used to find points within the occlusion shadows.
+
+   * Place this in a folder (e.g., `demo/pure_points/`).
+
+2. **Vehicle Labels Directory:** A folder containing `.txt` files that log the poses of all vehicles in your dataset. Each line in each file must represent a single vehicle in the following format:
+
+
 ```
+x y z dx dy dz dtheta
+```
+
+* The script primarily uses `x` (col 0), `y` (col 1), and `dtheta` (col 6) to build the heatmap.
