@@ -90,9 +90,16 @@ To evaluate your own scene, you need two things:
 
 2. **Vehicle Labels Directory:** A folder containing `.txt` files that log the poses of all vehicles in your dataset. Each line in each file must represent a single vehicle in the following format:
 
+   ```
+   x y z dx dy dz theta
+   ```
 
-```
-x y z dx dy dz dtheta
-```
+   Here is a breakdown of what each number represents:
 
-* The script primarily uses `x` (col 0), `y` (col 1), and `dtheta` (col 6) to build the heatmap.
+   - x y z: The 3D coordinates of the vehicle's center position.
+
+   - dx dy dz: The dimensions of the vehicle (its length, width, and height).
+
+   - theta: The vehicle's rotation (yaw) in radians, indicating its heading.
+
+   The script primarily uses `x` (col 0), `y` (col 1), and `dtheta` (col 6) to build the heatmap.
